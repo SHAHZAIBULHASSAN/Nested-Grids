@@ -1,0 +1,671 @@
+<html><head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- jQuery library -->
+    <!--<script src="https://cdn.jsdelivr.net/npm/jquery@3.5.1/dist/jquery.slim.min.js"></script>-->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js" integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4=" crossorigin="anonymous"></script>
+    <!-- Popper JS -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script type="text/javascript" src="new_commonLib.js"></script>
+
+    <script>
+        var Polys = [];
+        var returnArray = [];
+        var transpArray = [];
+        var RouteTypes;
+        var geocoder;
+        var accountAddress;
+        var accountCoords = [];
+        var PolyType = {
+            Operations: 397340000,
+            Transportation: 397340001
+        };
+
+        function setClientApiContext(xrm, formContext) {
+            window.Xrm = xrm;
+            window._formContext = formContext;
+            CommonLib.formContext = formContext;
+
+            $("#CompanySelector").change(function () {
+                getHomeBasePolygon(this.value, PolyType.Operations);
+                getTransportationPolygon(this.value, PolyType.Transportation);
+            });
+
+            $("#MaterialTypeSelector").change(function () {
+                if (this.value != "") {
+                    getContainerSizesFromMaterial(this.value);
+                    getRoundTripMinutes(Polys[0], this.value);
+                }
+            });
+
+
+
+            initMap();
+        }
+
+        function performCalculations() {
+            debugger;
+            var materialType = $("#MaterialTypeSelector").val();
+            var containerSize = $("#ContainerSizeSelector").val();
+            //if ((materialType != "" && materialType != null) && (containerSize != "" && containerSize != null)) {
+                var totalMints = 0; var fuelSurchargeMints = 0;
+                var paperworkOrSignatures = $("#PaperworkOrSignaturesId");
+                 
+                var fuelSurcharge = $("#FuelSurchargeId");
+                var accessWOs = $("#AccessWOsId");
+                var sameSpotHaul = $("#SameSpotHaulId");
+                var securityOrClearance = $("#SecurityOrClearanceId");
+                var additionalPPE = $("#AdditionalPPEId");
+               
+
+
+
+
+                if (paperworkOrSignatures.is(":checked")) {
+                    getCostValue(paperworkOrSignatures.val()).then((minutes) => {
+                        totalMints+ = minutes;
+                         $('#QuestionnaireMinutes').val(totalMints); 
+                    });
+                }
+                if (fuelSurcharge.is(":checked")) {
+                      getCostValue(fuelSurcharge.val()).then((minutes) => {
+                        fuelSurchargeMints = minutes;
+                    $('#FuelSurcharge').val(fuelSurchargeMints);
+
+                    });
+                }
+
+
+              // if (accessWOs.is(":checked")) {
+                 //     getCostValue(accessWOs.val()).then((minutes) => {
+                 //       totalMints += minutes;
+                 //   });
+              //  }
+
+                if (sameSpotHaul.is(":checked")) {
+                      getCostValue(sameSpotHaul.val()).then((minutes) => {
+                        totalMints += minutes;
+                        $('#QuestionnaireMinutes').val(totalMints); 
+                    });
+                }
+                if (securityOrClearance.is(":checked")) {
+                      getCostValue(securityOrClearance.val()).then((minutes) => {
+                        totalMints+ = minutes;
+                        $('#QuestionnaireMinutes').val(totalMints); 
+                    });
+                }
+                   
+                if (additionalPPE.is(":checked")) {
+                      getCostValue(additionalPPE.val()).then((minutes) => {
+                        totalMints += minutes;
+                        $('#QuestionnaireMinutes').val(totalMints); 
+                    });
+                }
+                
+            
+              
+
+            
+            }
+          //  else {
+           //     console.log("MaterialType or ContainerSize is not selected");
+          //  }
+       // }
+
+  function getCostValue(recordId) {
+            var odata = "?$select=c5_costid,_c5_metrics_value,c5_name,c5_value";
+
+            return Xrm.WebApi.online.retrieveRecord("c5_cost", recordId, odata).then(
+                function success(result) {
+                    debugger;
+                    var c5_costid = result["c5_costid"];
+                    var _c5_metrics_value = result["_c5_metrics_value"];
+                    var _c5_metrics_value_formatted = result["_c5_metrics_value@OData.Community.Display.V1.FormattedValue"];
+                    var _c5_metrics_value_lookuplogicalname = result["_c5_metrics_value@Microsoft.Dynamics.CRM.lookuplogicalname"];
+                    var c5_name = result["c5_name"];
+                    var c5_value = result["c5_value"];
+                    var c5_value_formatted = result["c5_value@OData.Community.Display.V1.FormattedValue"];
+                    return result["c5_value"];
+                },
+                function (error) {
+                    Xrm.Utility.alertDialog(error.message);
+                }
+           
+      
+            );
+        
+
+            
+        }
+
+
+        function getRoundTripMinutes(polygonId, materialTypeId) {
+            getDropOffCoords(polygonId, materialTypeId).then((dropOffCoords) => {
+                return roundTripMinutes(dropOffCoords.lat, dropOffCoords.lon);
+            }).then((minutes) => {
+                $("#roundTripMinutes").val(minutes);
+            }).catch((e) => {
+                console.log("Error in finding Round Trip Minutes");
+                console.log(e);
+            });
+        }
+
+        function getDropOffCoords(polygonId, materialTypeId) {
+            var odata = "?$select=_c5_dropoffsite_value,_c5_materialtype_value,c5_name"
+            odata += "&$expand=c5_DropOffSite($select=c5_latitude,c5_longitude)";
+            odata += "&$filter=_c5_homebase_value eq " + polygonId + " and  _c5_materialtype_value eq " + materialTypeId;
+
+            return Xrm.WebApi.online.retrieveMultipleRecords("c5_polygonmaterialcostcombinations", odata).then(
+                function success(dropOff) {
+                    return { lat: dropOff.entities[0].c5_DropOffSite.c5_latitude, lon: dropOff.entities[0].c5_DropOffSite.c5_longitude };
+                },
+                function (error) {
+                    Xrm.Utility.alertDialog(error.message);
+                }
+            );
+        }
+
+        function getContainerSizesFromMaterial(materialTypeId) {
+            return Xrm.WebApi.online.retrieveMultipleRecords("c5_materialcontainercombinations", "?$select=_c5_container_value,_c5_materialtype_value,c5_name&$filter=_c5_materialtype_value eq " + materialTypeId).then(
+                function success(results) {
+                    $('#ContainerSizeSelector').find('option').remove().end()
+                        .append('<option selected value="">Select from below</option>');
+                    for (var y = 0; y < results.entities.length; y++) {
+                        $("#ContainerSizeSelector").append("<option value='" + results.entities[y]["_c5_container_value"] + "'>" + results.entities[y]["_c5_container_value@OData.Community.Display.V1.FormattedValue"] + "</option>");
+
+                    }
+                },
+                function (error) {
+                    Xrm.Utility.alertDialog(error.message);
+                }
+            );
+        }
+
+        function getTransportationPolygon(RouteTypeId) {
+            console.log("getTransportationPolygon", RouteTypeId);
+
+            RetAllCoords(null, PolyType.Transportation).then((x) => {
+                return getPolygons(RouteTypeId, PolyType.Transportation);
+            }).then((results) => {
+                console.log("getPolygons Results", results);
+                var promiseArray = [];
+
+                for (var i = 0; i < transpArray.length; i++) {
+                    transpArray[i]["lat"] = transpArray[i]["c5_latitude"];
+                    transpArray[i]["lng"] = transpArray[i]["c5_longitude"];
+                }
+
+                for (var i = 0; i < results.length; i++) {
+                    promiseArray.push(checkContainsLocation(results[i]));
+                }
+
+                return Promise.all(promiseArray);
+            }).then((isInArray) => {
+                console.log("isInArray", isInArray);
+
+                if (!!isInArray && isInArray.length > 0) {
+                    for (var k = 0; k < isInArray.length; k++) {
+                        if (isInArray[k] == true)
+                            return k;
+                    }
+                }
+            }).then((PolyIndex) => {
+                console.log("PolyIndex", PolyIndex);
+                if (!!PolyIndex)
+                    return getHomeBase(PolyIndex, PolyType.Transportation);
+            }).then((polyRecord) => {
+                console.log("polyRecord", polyRecord);
+                if (!!polyRecord) {
+                    $("#transportationTimeModifiers").val(polyRecord.polygonName);
+                    $("#transportationTimeModifiers").prop("vogtner", polyRecord.polygonId);
+                }
+            }).catch((e) => {
+                console.log("Error in finding Transpo Polygon");
+                console.log(e);
+            });
+        }
+
+        function getHomeBasePolygon(RouteTypeId) {
+            getPolygons(RouteTypeId, PolyType.Operations).then((results) => {
+                var promiseArray = [];
+
+                for (var i = 0; i < results.length; i++) {
+                    promiseArray.push(checkContainsLocation(results[i]));
+                }
+
+                return Promise.all(promiseArray);
+            }).then((isInArray) => {
+                for (var k = 0; k < isInArray.length; k++) {
+                    if (isInArray[k] == true)
+                        return k;
+                }
+            }).then((homeBaseIndex) => {
+                return getHomeBase(homeBaseIndex, PolyType.Operations);
+            }).then((polyRecord) => {
+                Polys[0] = polyRecord.polygonId;
+                return polyRecord.polygonId;
+            }).then((polyid) => {
+                return getMaterialTypesByPolygon(polyid);
+            }).then((materialTypes) => {
+                $('#MaterialTypeSelector').find('option').remove().end()
+                    .append('<option selected value="">Select from below</option>');
+                for (var y = 0; y < materialTypes.length; y++) {
+                    $("#MaterialTypeSelector").append("<option value='" + materialTypes[y]["_c5_materialtype_value"] + "'>" + materialTypes[y]["_c5_materialtype_value@OData.Community.Display.V1.FormattedValue"] + "</option>");
+                }
+            }).catch((e) => {
+                console.log("Error in finding HomeBase");
+                console.log(e);
+            });
+        }
+
+        function getMaterialTypesByPolygon(polyid) {
+            return Xrm.WebApi.online.retrieveMultipleRecords("c5_polygonmaterialcostcombinations", "?$select=_c5_materialtype_value,c5_name&$filter=_c5_homebase_value eq " + polyid).then(
+                function success(results) {
+                    return results.entities;
+                },
+                function (error) {
+                    Xrm.Utility.alertDialog(error.message);
+                }
+            );
+        }
+
+        function getHomeBase(index, polyType) {
+            return Xrm.WebApi.online.retrieveMultipleRecords("c5_polygon", "?$select=c5_name,c5_polygonid,_c5_routetype_value,c5_sequence&$filter=_c5_routetype_value eq 90abdce6-af77-ec11-b814-005056913c1d and c5_polygontype eq " + polyType).then(
+                function success(results) {
+                    if (results.entities.length > 0) {
+                        return {
+                            polygonName: results.entities[index].c5_name,
+                            polygonId: results.entities[index]["c5_polygonid"]
+                        };
+                    }
+                },
+                function (error) {
+                    Xrm.Utility.alertDialog(error.message);
+                }
+            );
+        }
+
+        function initMap() {
+
+            Xrm.Utility.showProgressIndicator("Gathering useful information...");
+
+            geocoder = new google.maps.Geocoder();
+
+            var address = CommonLib.getValue("address1_composite");
+            $("#serviceAddress").val(address);
+            accountAddress = address;
+
+            geocoder.geocode({ 'address': address }, (geos, status) => {
+                if (status == "OK") {
+                    accountCoords[0] = geos[0].geometry.location.lat();
+                    accountCoords[1] = geos[0].geometry.location.lng();
+                }
+                else
+                    console.log("Error in GeoCoding with status: " + status);
+            });
+
+            getRouteTypes().then((rTypes) => {
+                RouteTypes = rTypes;
+                return RetAllCoords(null, PolyType.Operations);
+
+            }).then((x) => {
+                for (var i = 0; i < returnArray.length; i++) {
+                    returnArray[i]["lat"] = returnArray[i]["c5_latitude"];
+                    returnArray[i]["lng"] = returnArray[i]["c5_longitude"];
+                }
+                var promiseArray = [];
+
+                for (var z = 0; z < RouteTypes.entities.length; z++) {
+                    promiseArray.push(getPolygons(RouteTypes.entities[z].c5_routetypeid, PolyType.Operations));
+                }
+
+                return Promise.all(promiseArray);
+
+            }).then((PolyResults) => {
+                var promiseArray2 = [];
+                for (var q = 0; q < PolyResults.length; q++) {
+                    promiseArray2.push(checkContainsLocation(PolyResults[q]));
+                }
+
+                return Promise.all(promiseArray2);
+
+            }).then((finalResults) => {
+                var companyIDCount = 0;
+                for (var d = 0; d < finalResults.length; d++) {
+                    if (finalResults[d]) {
+                        $("#CompanySelector").append("<option value='" + RouteTypes.entities[d]["c5_routetypeid"] + "'>" + RouteTypes.entities[d]["c5_name"] + "</option>");
+                        companyIDCount++;
+                    }
+                }
+                if (companyIDCount == 1) {
+                    $("#CompanySelector").change();
+                }
+
+                Xrm.Utility.closeProgressIndicator();
+            }).catch((e) => {
+                console.log("Error in initMap");
+                console.log(e);
+                Xrm.Utility.closeProgressIndicator();
+            });
+        }
+
+        function roundTripMinutes(dropOffLat, dropOffLon) {
+            return new Promise((resolve, reject) => {
+                const directionsService = new google.maps.DirectionsService();
+                const org = new google.maps.LatLng(accountCoords[0], accountCoords[1]);
+                const dest = new google.maps.LatLng(accountCoords[0], accountCoords[1]);
+                const waypoint = new google.maps.LatLng(dropOffLat, dropOffLon);
+
+                var request = {
+                    origin: org,
+                    destination: dest,
+                    travelMode: google.maps.TravelMode.DRIVING,
+                    waypoints: [{
+                        location: waypoint,
+                        stopover: false
+                    }]
+                };
+
+                directionsService.route(request, (response, status) => {
+                    if (status == 'OK') {
+                        if (response.routes && response.routes.length > 0) {
+                            if (response.routes[0].legs && response.routes[0].legs.length > 0) {
+                                resolve(response.routes[0].legs[0].duration.value);
+                            }
+                        }
+                    }
+                    else {
+                        reject(status);
+                    }
+                });
+            });
+        }
+
+        function checkContainsLocation(mapPaths) {
+            return new Promise((resolve, reject) => {
+                const Poly1 = new google.maps.Polygon({ paths: mapPaths });
+
+                const point = new google.maps.LatLng(accountCoords[0], accountCoords[1]);
+                const inPoly = google.maps.geometry.poly.containsLocation(point, Poly1);
+
+                resolve(inPoly);
+            });
+        }
+
+        function getRouteTypes() {
+            return Xrm.WebApi.online.retrieveMultipleRecords("c5_routetype", "?$select=c5_name,c5_routetypeid").then(
+                function success(results) {
+                    return results;
+                },
+                function (error) {
+                    console.log(error);
+                }
+            );
+        }
+
+        function getPolygons(RouteType, polyType) {
+            return Xrm.WebApi.online.retrieveMultipleRecords("c5_polygon", "?$filter=_c5_routetype_value eq " + RouteType + " and c5_polygontype eq " + polyType + "&$orderby=c5_sequence asc").then(
+                function success(results) {
+                    var mapPaths = [];
+                    var coordArray = polyType == PolyType.Operations ? returnArray : transpArray;
+                    console.log("coordArray", coordArray);
+
+                    for (var i = 0; i < results.entities.length; i++) {
+                        var c5_polygonid = results.entities[i]["c5_polygonid"];
+                        var polygonArray = [];
+                        for (var j = 0; j < coordArray.length; j++) {
+                            if (c5_polygonid == coordArray[j]["_c5_polygon_value"]) {
+                                polygonArray.push(coordArray[j]);
+                            }
+                        }
+                        mapPaths.push(polygonArray);
+                    }
+                    return mapPaths;
+                },
+                function (error) {
+                    console.log(error);
+                }
+            );
+        }
+
+        function RetPolyPage(token, polyType) {
+            var splitText = Xrm.Utility.getGlobalContext().getClientUrl() + "/api/data/v9.0/c5_polygoncoordinates";
+            var url = !!token ? token.split(splitText)[1] : "?$select=c5_latitude,c5_longitude,c5_name,_c5_polygon_value,c5_polygoncoordinateid,c5_sequence,_c5_routetype_value&$expand=c5_Polygon($select=c5_polygontype)&$filter=(c5_Polygon/c5_polygontype eq " + polyType + ")&$orderby=c5_sequence asc";
+            return Xrm.WebApi.retrieveMultipleRecords("c5_polygoncoordinate", url, 5000).then((results) => {
+                console.log("Poly Page Results", results);
+                return results;
+            }).catch((e) => {
+                console.log("Error Retrieving Polys");
+                console.log(e);
+            });
+        }
+
+        function RetAllCoords(token, polyType) {
+            return RetPolyPage(token, polyType).then((pageResults) => {
+                if (polyType == PolyType.Operations) {
+                    var mergeArray = returnArray.concat(pageResults.entities);
+                    returnArray = mergeArray;
+                    console.log("returnArray", returnArray);
+                }
+                else {
+                    var mergeArray = transpArray.concat(pageResults.entities);
+                    transpArray = mergeArray;
+                    console.log("transpArray", transpArray);
+                }
+                
+                if (!!pageResults.nextLink) {
+                    return RetAllCoords(pageResults.nextLink, polyType).then((results) => {
+                        if (!!results) {
+                            pageResults.entities.concat(results.entities);
+                        }
+                    }).catch((e) => {
+                        console.log("Error Retrieving Polys All Records");
+                        console.log(e);
+                    });
+                }
+                else {
+                    return true;
+                }
+            }).catch((e) => {
+                console.log("Error Retrieving Polys All Records Main Function");
+                console.log(e);
+            });
+        }
+    </script>
+<meta><meta><meta><meta></head>
+<body onfocusout="parent.setEmailRange();" style="overflow-wrap: break-word;">
+    <div class="container ">
+        <div class="mb-3 row">
+            <div class="col-8">
+                <label>Service Address from CRM </label>
+                <input type="text" class="form-control col-8" id="serviceAddress" size="10" name="fname">
+            </div>
+            <div class="col-4">
+                <label>Payment Term?</label>
+                <select class="form-select">
+                    <option selected="">Select from below</option>
+                    <option value="1">One</option>
+                    <option value="2">Two</option>
+                    <option value="3">Three</option>
+                </select>
+            </div>
+        </div>
+        <div class="mb-3 row">
+            <div class="col-4">
+                <label>Round Trip Minutes </label>
+                <input type="number" class="form-control col-8" id="roundTripMinutes" size="10" name="fname">
+            </div>
+            <div class="col-4">
+                <label>Soft-Pak Company ID</label>
+                <select class="form-select" id="CompanySelector">
+                </select>
+            </div>
+            <div class="col-4">
+                <label>Transportation Time Modifiers</label>
+                <input type="text" class="form-control col-8" id="transportationTimeModifiers" size="10" name="fname" vogtner="0">
+                <!--<select class="form-select">
+                <option selected>Select from below</option>
+                <option value="1">One</option>
+                <option value="2">Two</option>
+                <option value="3">Three</option>
+            </select>-->
+            </div>
+        </div>
+        <div class="mb-3 row">
+            <div class="col-4">
+                <label>Material Type</label>
+                <select class="form-select" id="MaterialTypeSelector">
+                </select>
+            </div>
+            <div class="col-4">
+                <label>Container Size (cubic yd)</label>
+                <select class="form-select" id="ContainerSizeSelector">
+                </select>
+            </div>
+            <div class="col-4">
+                <label>Haul Rate Format</label>
+                <select class="form-select">
+                    <option selected="">Select from below</option>
+                    <option value="1">One</option>
+                    <option value="2">Two</option>
+                    <option value="3">Three</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="mb-3 row">
+            <div class="col-8">
+                <label>Pricing Result</label>
+                <input type="text" class="form-control col-8" id="PricingResult" size="10" name="fname">
+            </div>
+        </div>
+        <div class="mb-3 row">
+            <div class="col-4">
+                <button type="button" onclick="performCalculations()" class="btn btn-primary">Get Price</button>
+            </div>
+        </div>
+
+
+        <div class="mb-3 row">
+            <div class="col-6">
+                <label>Service Restrictions</label>
+                <hr>
+            </div>
+            <div class="col-6">
+                <label>Driver Accessibility</label>
+                <hr>
+            </div>
+        </div>
+
+        <div class="mb-3 row">
+            <div class="col-6">
+                <label>TDS will charge the variable fuel surchange</label>
+                <input type="checkbox" id="FuelSurchargeId" value="7abd897c-ff85-ec11-b814-005056913c1d">
+                <br>    <br>
+                <label>TDS will have 24-hour access for all WOs</label>
+                <input type="checkbox" id="AccessWOsId">
+                <br>    <br>
+                <label>This customer will not have same spot hauls </label>
+                <input type="checkbox" id="SameSpotHaulId" value="1b6090da-fb85-ec11-b814-005056913c1d"> <br> <hr>
+            </div>
+            <div class="col-6">
+                <label>Driver must wait for security / clearance</label>
+                <input type="checkbox" id="SecurityOrClearanceId" value="419a97f3-fb85-ec11-b814-005056913c1d">
+                <br>    <br>
+                <label>Driver must wait for paperwork /signatures </label>
+                <input type="checkbox" id="PaperworkOrSignaturesId" value="1bbb3501-fc85-ec11-b814-005056913c1d">
+                <br>    <br>
+                <label>Driver must wait for additional PPE</label>
+                <input type="checkbox" id="AdditionalPPEId" value="9e8baa10-fc85-ec11-b814-005056913c1d"> <br> <hr>
+            </div>
+
+        </div>
+
+        <div class="mb-3 row">
+            <div class="col-4">
+                <label>Delivery Rate</label>
+                <input type="number" class="form-control col-8 " id="DeliveryRate" size="10" name="fname">
+            </div>
+        </div>
+
+        <div class="mb-3 row">
+            <div class="col-4">
+                <label>Rental $ per day </label>
+                <input type="number" class="form-control col-8 " id="Delivery$perday" size="10" name="fname">
+            </div>
+            <div class="col-4">
+                <label>Rental Days</label>
+                <input type="number" class="form-control col-8" id="RentalDays" size="10" name="fname">
+            </div>
+            <div class="col-4">
+                <label>Rental Fee</label>
+                <input type="number" class="form-control col-8" id="RentalFee" size="10" name="fname">
+            </div>
+        </div>
+
+        <div class="mb-3 row">
+            <div class="col-4">
+                <label>Price Per Unit </label>
+                <input type="number" class="form-control col-8" id="PriceperUnit" size="10" name="fname">
+            </div>
+            <div class="col-4">
+                <label>Quantity</label>
+                <input type="number" class="form-control col-8" id="Quantity" size="10" name="fname">
+            </div>
+            <div class="col-4">
+                <label>Detail Line Amount</label>
+                <input type="number" class="form-control col-8" id="DetailLineAmount" size="10" name="fname">
+            </div>
+        </div>
+
+        <div class="mb-3 row">
+            <div class="col-4">
+                <label>Configuration  Comment</label>
+                <input type="text" class="form-control col-8" id="Configuration" size="10" name="fname">
+            </div>
+            <div class="col-4">
+                <label>Tax $ Amount</label>
+                <input type="number" class="form-control col-8" id="Tax$Amount" size="10" name="fname">
+            </div>
+            <div class="col-4">
+                <label>Total Line Amount</label>
+                <input type="number" class="form-control col-8" id="TotalLineAmount" size="10" name="fname">
+            </div>
+        </div>
+
+        <div class="mb-3 row">
+            <div class="col-4">
+                <label>Questionnaire Minutes</label>
+                <input type="text" class="form-control col-8" id="QuestionnaireMinutes" size="10" name="QuestionnaireMinutes">
+            </div>
+            <div class="col-4">
+                <label>Fuel Surcharge</label>
+                <input type="text" class="form-control col-8" id="FuelSurcharge" size="10" name="FuelSurcharge">
+            </div>
+            <div class="col-4">
+                <label>Cost Per Hour</label>
+                <input type="text" class="form-control col-8" id="CostPerHour" size="10" name="CostPerHour">
+            </div>
+        </div>
+
+        <div class="mb-3 row">
+            <div class="col-4">
+                <label>Margin</label>
+                <input type="text" class="form-control col-8" id="Margin" size="10" name="Margin">
+            </div>
+            <div class="col-4">
+                <label>Transportation Modifier</label>
+                <input type="text" class="form-control col-8" id="TransportationModifier" size="10" name="TransportationModifier">
+            </div>
+        </div>
+
+    </div>
+    <!-- Async script executes immediately and must be after any DOM elements used in callback. -->
+    <!--<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyD_FsE33j-hQGCED12wuZ892pzbdupwLEc&callback=initMap&libraries=geometry&v=weekly" async></script>-->
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyD_FsE33j-hQGCED12wuZ892pzbdupwLEc&amp;libraries=geometry&amp;v=weekly" async=""></script>
+
+</body></html>
